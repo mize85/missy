@@ -10,6 +10,7 @@ import (
 // Writer is used to write messages to underlying broker
 type Writer interface {
 	Write(key []byte, value []byte) error
+	WriteWithRetryCounter(key []byte, value []byte, retryCount int) error
 	io.Closer
 }
 
@@ -72,6 +73,17 @@ func (mw *missyWriter) Write(key []byte, value []byte) error {
 	}
 	return mw.brokerWriter.WriteMessages(context.Background(), msg)
 }
+
+// Write new message with retry
+func (mw *missyWriter) WriteWithRetryCounter(key []byte, value []byte, retryCount int) error {
+	msg := Message{
+		Key:   key,
+		Value: value,
+		RetryCounter: retryCount,
+	}
+	return mw.brokerWriter.WriteMessages(context.Background(), msg)
+}
+
 
 // Close writer after use
 func (mw *missyWriter) Close() error {

@@ -7,6 +7,7 @@ import (
 
 	"github.com/microdevs/missy/log"
 	"github.com/segmentio/kafka-go"
+	"strconv"
 )
 
 // ReadMessageFunc is a message reading callback function, on error message will not be committed to underlying
@@ -34,6 +35,9 @@ type missyReader struct {
 	topic        string
 	brokerReader BrokerReader
 	readFunc     *ReadMessageFunc
+	writer       Writer
+	dlqWriter    Writer
+	numOfRetries int
 }
 
 // readBroker us as a wrapper for kafka.Reader implementation to fulfill BrokerReader interface
@@ -94,7 +98,21 @@ func NewReader(brokers []string, groupID string, topic string) Reader {
 		MaxBytes:       10e6, // 10MB do we want it from config?
 	})
 
-	return &missyReader{brokers: brokers, groupID: groupID, topic: topic, brokerReader: &readBroker{kafkaReader}}
+	numOfRetries, err := strconv.Atoi("number.of.retries")
+	if err != nil {
+		log.Debug("number.of.retries was not set, using default value of 5")
+		numOfRetries = 5
+	}
+
+	return &missyReader{
+		brokers:      brokers,
+		groupID:      groupID,
+		topic:        topic,
+		brokerReader: &readBroker{kafkaReader},
+		writer:       NewWriter(brokers, topic),//used to write message again in case of error
+		dlqWriter:    NewWriter(brokers, topic+".dlq"),//used to write message to DLQ if all retries failed
+		numOfRetries: numOfRetries,
+	}
 }
 
 // Read start reading goroutine that calls msgFunc on new message, you need to close it after use
@@ -112,21 +130,29 @@ func (mr *missyReader) Read(msgFunc ReadMessageFunc) error {
 		for {
 			ctx := context.Background()
 
-			m, err := mr.brokerReader.FetchMessage(ctx)
+			message, err := mr.brokerReader.FetchMessage(ctx)
 			if err != nil {
 				break
 			}
 
-			log.Infof("# messaging # new message: [topic] %v; [part] %v; [offset] %v; %s = %s\n", m.Topic, m.Partition, m.Offset, string(m.Key), string(m.Value))
-			if err := msgFunc(m); err != nil {
+			log.Infof("# messaging # new message: [topic] %v; [part] %v; [offset] %v; [retry] %v, %s = %s\n", message.Topic, message.Partition, message.Offset, message.RetryCounter, string(message.Key), string(message.Value))
+			if err := msgFunc(message); err != nil {
 				log.Errorf("# messaging # cannot commit a message: %v", err)
+				retryCounter := message.RetryCounter
+				if message.RetryCounter >= mr.numOfRetries {
+					log.Error("Writing message to DLQ as all retries failed")
+					mr.dlqWriter.Write(message.Key, message.Value)
+				} else {
+					log.Infof("# messaging # retry number: %s", retryCounter+1)
+					mr.writer.WriteWithRetryCounter(message.Key, message.Value, retryCounter+1)
+				}
 				continue
 			}
 
 			// commit message if no error
-			if err := mr.brokerReader.CommitMessages(ctx, m); err != nil {
+			if err := mr.brokerReader.CommitMessages(ctx, message); err != nil {
 				// should we do something else to just logging not committed message?
-				log.Errorf("cannot commit message [%s] %v/%v: %s = %s; with error: %v", m.Topic, m.Partition, m.Offset, string(m.Key), string(m.Value), err)
+				log.Errorf("cannot commit message [%s] %v/%v: %s = %s; with error: %v", message.Topic, message.Partition, message.Offset, string(message.Key), string(message.Value), err)
 			}
 		}
 	}()

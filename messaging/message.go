@@ -5,10 +5,11 @@ import (
 )
 
 type Message struct {
-	Topic     string
-	Key       []byte
-	Value     []byte
-	Time      time.Time
-	Partition int
-	Offset    int64
+	Topic        string
+	Key          []byte
+	Value        []byte
+	Time         time.Time
+	Partition    int
+	Offset       int64
+	RetryCounter int
 }
