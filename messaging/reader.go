@@ -94,8 +94,9 @@ func NewReader(brokers []string, groupID string, topic string) Reader {
 		MaxBytes:       10e6, // 10MB do we want it from config?
 	})
 	log.Debug("Configured kafkaReader.Offset()=", kafkaReader.Offset())
-	log.Debug("Setting kafkaReader.Offset() to -1")
-	kafkaReader.SetOffset(-1)
+	log.Debug("Setting ASD kafkaReader.Offset() to -1")
+	err := kafkaReader.SetOffset(-1)
+	log.Debug("Setting offset error: %s", err)
 
 	return &missyReader{brokers: brokers, groupID: groupID, topic: topic, brokerReader: &readBroker{kafkaReader}}
 }
